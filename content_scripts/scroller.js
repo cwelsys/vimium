@@ -266,82 +266,153 @@ const CoreScroller = {
       return;
     }
 
-    // We don't activate new animators on keyboard repeats; rather, the most-recently activated
-    // animator continues scrolling.
     if (this.lastEvent != null ? this.lastEvent.repeat : undefined) {
       return;
     }
 
     const activationTime = ++this.time;
-    const myKeyIsStillDown = () => (this.time === activationTime) && this.keyDownKey != null;
-
-    // Store amount's sign and make amount positive; the arithmetic is clearer when amount is
-    // positive.
     const sign = getSign(amount);
-    amount = Math.abs(amount);
-
-    // Initial intended scroll duration (in ms). We allow a bit longer for longer scrolls.
-    const duration = Math.max(100, 20 * Math.log(amount));
-
-    let totalDelta = 0;
-    let totalElapsed = 0.0;
-    let calibration = 1.0;
-    let previousTimestamp = null;
-    const cancelEventListener = this.installCancelEventListener();
-
-    const animate = (timestamp) => {
-      if (previousTimestamp == null) {
-        previousTimestamp = timestamp;
-      }
-      if (timestamp === previousTimestamp) {
-        return requestAnimationFrame(animate);
-      }
-
-      // The elapsed time is typically about 16ms.
-      const elapsed = timestamp - previousTimestamp;
-      totalElapsed += elapsed;
-      previousTimestamp = timestamp;
-
-      // The constants in the duration calculation, above, are chosen to provide reasonable scroll
-      // speeds for distinct keypresses. For continuous scrolls, some scrolls are too slow, and
-      // others too fast. Here, we speed up the slower scrolls, and slow down the faster scrolls.
-      if (
-        myKeyIsStillDown() && (75 <= totalElapsed) &&
-        (this.minCalibration <= calibration && calibration <= this.maxCalibration)
-      ) {
-        // Speed up slow scrolls.
-        if ((1.05 * calibration * amount) < this.calibrationBoundary) {
-          calibration *= 1.05;
-        }
-        // Slow down fast scrolls.
-        if (this.calibrationBoundary < (0.95 * calibration * amount)) {
-          calibration *= 0.95;
-        }
-      }
-
-      // Calculate the initial delta, rounding up to ensure progress. Then, adjust delta to account
-      // for the current scroll state.
-      let delta = Math.ceil(amount * (elapsed / duration) * calibration);
-      delta = myKeyIsStillDown() ? delta : Math.max(0, Math.min(delta, amount - totalDelta));
-
-      if (delta && performScroll(element, direction, sign * delta)) {
-        totalDelta += delta;
-        return requestAnimationFrame(animate);
-      } else {
-        // We're done.
-        handlerStack.remove(cancelEventListener);
-        return checkVisibility(element);
-      }
-    };
-
-    // If we've been asked not to be continuous, then we advance time, so the myKeyIsStillDown test
-    // always fails.
+    const size = Math.abs(amount);
+    const axis = scrollProperties[direction].axisName;
+    let a = this.animator;
+    const chained = a && a.element === element && a.direction === direction && a.sign === sign;
+    if (!chained) {
+      a = this.animator = {
+        element,
+        direction,
+        sign,
+        axis,
+        ratio: globalThis.devicePixelRatio || 1,
+        origin: element[axis],
+        traveled: 0,
+        applied: 0,
+        target: 0,
+        perFrame: 0,
+        previous: null,
+      };
+    }
+    const settled = a.phase === "stop" ? a.stopAt : Math.max(a.target, a.traveled);
+    a.target = settled + size * a.ratio;
+    a.size = size;
+    a.held = 0;
+    a.phase = "go";
+    a.activationTime = continuous ? activationTime : -1;
     if (!continuous) {
       ++this.time;
     }
+    if (!chained) {
+      requestAnimationFrame((timestamp) => this.animate(a, timestamp));
+    }
+  },
 
-    // Start scrolling.
-    requestAnimationFrame(animate);
+  animator: null,
+  frameInterval: 1000 / 60,
+  frameSamples: [],
+  tapSpeedScale: 1.25,
+  holdSpeedScale: 0.75,
+  holdDelay: 140,
+  rampTime: 15,
+  stopTime: 60,
+
+  tapPixelsPerFrame(a) {
+    const duration = Math.max(100, 20 * Math.log(a.size));
+    const perFrame = (a.size / duration) * this.tapSpeedScale * a.ratio * this.frameInterval;
+    return Math.max(1, Math.round(perFrame));
+  },
+
+  holdPixelsPerFrame(a) {
+    const duration = Math.max(100, 20 * Math.log(a.size));
+    const perDuration = Math.max(
+      a.size * this.minCalibration,
+      Math.min(a.size * this.maxCalibration, this.calibrationBoundary),
+    );
+    const perFrame = (perDuration / duration) * this.holdSpeedScale * a.ratio * this.frameInterval;
+    return Math.max(1, Math.round(perFrame));
+  },
+
+  place(a, pixels) {
+    const before = a.element[a.axis];
+    const position = a.origin + (a.sign * pixels) / a.ratio;
+    a.element.scrollTo({ [a.direction === "x" ? "left" : "top"]: position, behavior: "instant" });
+    return a.element[a.axis] !== before;
+  },
+
+  animate(a, timestamp) {
+    if (this.animator !== a) {
+      return;
+    }
+    const next = () => requestAnimationFrame((t) => this.animate(a, t));
+    if (a.previous == null) {
+      a.previous = timestamp;
+      return next();
+    }
+    const elapsed = timestamp - a.previous;
+    if (elapsed <= 0) {
+      return next();
+    }
+    a.previous = timestamp;
+    if (elapsed < 50) {
+      this.frameSamples.push(elapsed);
+      if (this.frameSamples.length > 9) {
+        this.frameSamples.shift();
+      }
+      const sorted = [...this.frameSamples].sort((x, y) => x - y);
+      this.frameInterval = sorted[sorted.length >> 1];
+    }
+    const frames = Math.min(4, Math.max(1, Math.round(elapsed / this.frameInterval)));
+    const stopFrames = Math.max(1, this.stopTime / this.frameInterval);
+    const keyDown = this.time === a.activationTime && this.keyDownKey != null;
+    let done = false;
+
+    if (a.phase === "go") {
+      if (keyDown) {
+        a.held += elapsed;
+      }
+      const wanted = keyDown && a.held >= this.holdDelay
+        ? this.holdPixelsPerFrame(a)
+        : this.tapPixelsPerFrame(a);
+      a.perFrame += (wanted - a.perFrame) * Math.min(1, elapsed / this.rampTime);
+      if (Math.abs(wanted - a.perFrame) < 0.02) {
+        a.perFrame = wanted;
+      }
+      const remaining = a.target - a.traveled;
+      const stopDistance = (a.perFrame * stopFrames) / 2;
+      if (!keyDown && remaining <= 0) {
+        a.phase = "stop";
+        a.stopAt = a.traveled + stopDistance;
+      } else if (!keyDown && remaining <= stopDistance) {
+        a.phase = "stop";
+        a.stopAt = a.target;
+      } else {
+        a.traveled += a.perFrame * frames;
+      }
+      if (a.phase === "stop") {
+        const distance = Math.max(a.stopAt - a.traveled, 0.001);
+        a.slowdown = (a.perFrame * a.perFrame) / (2 * distance);
+      }
+    }
+    if (a.phase === "stop") {
+      const before = a.perFrame;
+      a.perFrame = Math.max(0, before - a.slowdown * frames);
+      a.traveled = a.perFrame > 0
+        ? Math.min(a.stopAt, a.traveled + ((before + a.perFrame) / 2) * frames)
+        : a.stopAt;
+      done = a.traveled >= a.stopAt;
+    }
+
+    const whole = Math.floor(a.traveled + 1e-6);
+    let moved = true;
+    if (done) {
+      this.place(a, a.stopAt);
+    } else if (whole > a.applied) {
+      a.applied = whole;
+      moved = this.place(a, whole);
+    }
+    if (done || !moved) {
+      this.animator = null;
+      return checkVisibility(a.element);
+    }
+    return next();
   },
 };
 
