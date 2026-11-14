@@ -1,0 +1,12 @@
+{
+  "addons": {
+    "vimium@cwel.sh": {
+      "updates": [
+        {
+          "version": "2.4.2.1",
+          "update_link": "https://git.cwel.sh/cwel/vimium/releases/download/v2.4.2.1/vimium-2.4.2.1.xpi"
+        }
+      ]
+    }
+  }
+}
