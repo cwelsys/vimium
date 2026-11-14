@@ -1,0 +1,18 @@
+when:
+  - event: tag
+    ref: refs/tags/v*.*.*.*
+
+steps:
+  - name: release
+    image: node:24
+    environment:
+      DENO: npx --yes deno@2.9.8
+      WEB_EXT_API_KEY:
+        from_secret: WEB_EXT_API_KEY
+      WEB_EXT_API_SECRET:
+        from_secret: WEB_EXT_API_SECRET
+      FORGEJO_TOKEN:
+        from_secret: BOT_TOKEN
+    commands:
+      - $DENO run -A make.js test-unit
+      - cwel/release.sh

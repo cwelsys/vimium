@@ -1,0 +1,16 @@
+when:
+  - event: push
+    branch: cwel
+  - event: pull_request
+  - event: manual
+
+steps:
+  - name: test
+    image: node:24
+    environment:
+      DENO: npx --yes deno@2.9.8
+    commands:
+      - $DENO lint
+      - $DENO run -A make.js test-unit
+      - cwel/build.sh
+      - npx --yes web-ext lint --self-hosted --source-dir dist/cwel
