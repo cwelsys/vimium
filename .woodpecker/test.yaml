@@ -8,7 +8,7 @@ steps:
   - name: test
     image: node:24
     environment:
-      DENO: npx --yes deno@2.9.8
+      DENO: npx --yes deno@2.9.5
     commands:
       - $DENO lint
       - $DENO run -A make.js test-unit

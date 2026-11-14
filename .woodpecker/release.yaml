@@ -6,7 +6,7 @@ steps:
   - name: release
     image: node:24
     environment:
-      DENO: npx --yes deno@2.9.8
+      DENO: npx --yes deno@2.9.5
       WEB_EXT_API_KEY:
         from_secret: WEB_EXT_API_KEY
       WEB_EXT_API_SECRET:
