@@ -3,8 +3,8 @@
     "vimium@cwel.sh": {
       "updates": [
         {
-          "version": "2.4.2.2",
-          "update_link": "https://git.cwel.sh/cwel/vimium/releases/download/v2.4.2.2/vimium-2.4.2.2.xpi"
+          "version": "2.4.2.3",
+          "update_link": "https://git.cwel.sh/cwel/vimium/releases/download/v2.4.2.3/vimium-2.4.2.3.xpi"
         }
       ]
     }
