@@ -117,7 +117,7 @@ export const handlers = {
     setMessageName(el, null);
   },
 
-  showFindMode() {
+  showFindMode({ reverse } = {}) {
     let executeQuery;
     const hudEl = document.querySelector("#hud");
     hudEl.classList.add("hud-find");
@@ -131,6 +131,8 @@ export const handlers = {
       inputEl.contentEditable = "true";
     }
     inputEl.id = "hud-find-input";
+    // Show "?" as the prompt for a backward search, as Vim does.
+    inputEl.classList.toggle("reverse", Boolean(reverse));
     hudEl.appendChild(inputEl);
 
     inputEl.addEventListener(
@@ -163,6 +165,7 @@ export const handlers = {
         globalThis.focus();
       }
       inputEl.focus();
+      UIComponentMessenger.postMessage({ name: "findInputFocused" });
     });
 
     findMode = {
@@ -170,7 +173,23 @@ export const handlers = {
       partialQuery: "",
       rawQuery: "",
       executeQuery,
+      // The length of the text typed into the page before this input had the focus.
+      typedInPageLength: 0,
     };
+  },
+
+  // Inserts text which the user typed into the page before this input had the focus. That text
+  // came before anything typed here, so it goes first, after any text inserted this way earlier.
+  typeInFindMode({ text }) {
+    const inputEl = document.querySelector("#hud-find-input");
+    if (inputEl == null) {
+      return;
+    }
+    const query = inputEl.textContent;
+    const at = findMode.typedInPageLength;
+    setTextInInputElement(inputEl, query.slice(0, at) + text + query.slice(at));
+    findMode.typedInPageLength += text.length;
+    findMode.executeQuery({});
   },
 
   updateMatchesCount({ matchCount, showMatchText }) {

@@ -1257,6 +1257,192 @@ context("Mode utilities", () => {
   });
 });
 
+context("FindMode.updateQuery", () => {
+  teardown(() => {
+    document.getElementById("test-div").innerHTML = "";
+  });
+
+  should("search only text which is displayed", () => {
+    stubSettings("regexFindMode", false);
+    // Only the elements with an id should match. The others hide "needle" with display: none on
+    // its parent or an ancestor, including a display: contents parent whose ancestor is hidden.
+    document.getElementById("test-div").innerHTML = `
+      <style>.contents { display: contents; }</style>
+      <p id="shown">needle</p>
+      <p style="display: none">needle</p>
+      <div style="display: none"><p>needle</p></div>
+      <div class="contents" id="contents">needle</div>
+      <div style="display: none"><div class="contents">needle</div></div>
+    `;
+    FindMode.query = { rawQuery: "" };
+    FindMode.updateQuery("needle");
+    const ids = FindMode.query.matches.map((match) => match.startNode.parentElement.id);
+    assert.equal(["shown", "contents"], ids);
+  });
+
+  should("skip text that only screen readers can see", () => {
+    stubSettings("regexFindMode", false);
+    // Jira labels its cards and buttons with text clipped to 1px, like the first two elements.
+    document.getElementById("test-div").innerHTML = `
+      <style>.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; }</style>
+      <span class="sr-only">needle</span>
+      <div class="sr-only"><b>needle</b></div>
+      <p id="shown">needle</p>
+    `;
+    FindMode.query = { rawQuery: "" };
+    FindMode.updateQuery("needle");
+    const ids = FindMode.query.matches.map((match) => match.startNode.parentElement.id);
+    assert.equal(["shown"], ids);
+  });
+});
+
+context("FindMode.updateQuery across nodes", () => {
+  setup(() => {
+    stubSettings("regexFindMode", false);
+    FindMode.query = { rawQuery: "" };
+  });
+
+  teardown(() => {
+    document.getElementById("test-div").innerHTML = "";
+  });
+
+  const matchedText = () => {
+    return FindMode.query.matches.map((match) => {
+      const range = document.createRange();
+      range.setStart(match.startNode, match.startOffset);
+      range.setEnd(match.endNode, match.endOffset);
+      return range.toString();
+    });
+  };
+
+  should("match text split across inline elements", () => {
+    document.getElementById("test-div").innerHTML = `<pre><span>one</span><span> two</span></pre>`;
+    assert.equal(1, FindMode.updateQuery("one two"));
+    assert.equal(["one two"], matchedText());
+  });
+
+  should("not match across blocks, inline-blocks or line breaks", () => {
+    document.getElementById("test-div").innerHTML = `
+      <div>alpha</div><div>beta</div>
+      <p>left<span style="display: inline-block">right</span></p>
+      <p>line<br>break</p>
+    `;
+    assert.equal(0, FindMode.updateQuery("alphabeta"));
+    assert.equal(0, FindMode.updateQuery("leftright"));
+    assert.equal(0, FindMode.updateQuery("linebreak"));
+    assert.equal(1, FindMode.updateQuery("right"));
+  });
+
+  should("collapse whitespace as the page renders it", () => {
+    document.getElementById("test-div").innerHTML = `
+      <p>one
+        <span> two</span>&nbsp;three</p>
+      <pre>two  spaces</pre>
+    `;
+    assert.equal(1, FindMode.updateQuery("one two three"));
+    assert.equal("one two three", matchedText()[0].replace(/\s+/g, " "));
+    assert.equal(1, FindMode.updateQuery("two  spaces"));
+  });
+});
+
+context("FindMode.selectLastMatchBefore", () => {
+  let start;
+
+  setup(() => {
+    stubSettings("regexFindMode", false);
+    document.getElementById("test-div").innerHTML = `
+      <p id="first">needle needle</p>
+      <p id="start">start</p>
+      <p id="last">needle</p>
+    `;
+    start = document.createRange();
+    FindMode.query = { rawQuery: "", backwards: true };
+    FindMode.updateQuery("needle");
+  });
+
+  teardown(() => {
+    document.getElementById("test-div").innerHTML = "";
+  });
+
+  const activeMatch = () => {
+    const match = FindMode.query.matches[FindMode.query.activeMatchIndex];
+    return [match.startNode.parentElement.id, match.startOffset];
+  };
+
+  should("choose the last match before the range", () => {
+    start.setStart(document.getElementById("start").firstChild, 0);
+    FindMode.selectLastMatchBefore(start);
+    assert.equal(["first", 7], activeMatch());
+  });
+
+  should("wrap to the last match when none comes before the range", () => {
+    start.setStart(document.getElementById("first").firstChild, 0);
+    FindMode.selectLastMatchBefore(start);
+    assert.equal(["last", 0], activeMatch());
+  });
+});
+
+context("FindMode.updateQuery case sensitivity", () => {
+  setup(() => {
+    stubSettings("regexFindMode", false);
+    document.getElementById("test-div").innerHTML = "<p>Needle needle</p>";
+    FindMode.query = { rawQuery: "" };
+  });
+
+  teardown(() => {
+    document.getElementById("test-div").innerHTML = "";
+  });
+
+  should("use smartcase by default", () => {
+    assert.equal(2, FindMode.updateQuery("needle"));
+    assert.equal(1, FindMode.updateQuery("Needle"));
+  });
+
+  should("ignore case with \\c anywhere in the query", () => {
+    assert.equal(2, FindMode.updateQuery("\\cNeedle"));
+    assert.equal(2, FindMode.updateQuery("Needle\\c"));
+  });
+
+  should("match case with \\C", () => {
+    assert.equal(1, FindMode.updateQuery("needle\\C"));
+  });
+});
+
+context("FindMode highlights", () => {
+  setup(() => {
+    stubSettings("regexFindMode", false);
+    FindMode.query = { rawQuery: "" };
+  });
+
+  teardown(() => {
+    FindMode.clearHighlights();
+    document.getElementById("test-div").innerHTML = "";
+  });
+
+  const search = (query) => {
+    FindMode.updateQuery(query);
+    FindMode.query.hasResults = FindMode.execute(FindMode.getActiveMatchText());
+  };
+  const highlightSize = (name) => CSS.highlights.get(name)?.size ?? 0;
+
+  should("highlight the active match apart from the others, until Escape", () => {
+    document.getElementById("test-div").innerHTML = "<p>needle needle needle</p>";
+    search("needle");
+    assert.equal(1, highlightSize("vimium-find-active"));
+    assert.equal(2, highlightSize("vimium-find-match"));
+    FindMode.handleEscape();
+    assert.equal(0, highlightSize("vimium-find-active"));
+    assert.equal(0, highlightSize("vimium-find-match"));
+  });
+
+  should("highlight at most 1,000 matches", () => {
+    document.getElementById("test-div").innerHTML = `<p>${"x ".repeat(1500)}</p>`;
+    search("x");
+    assert.equal(1500, FindMode.query.matchCount);
+    assert.equal(999, highlightSize("vimium-find-match"));
+  });
+});
+
 context("PostFindMode", () => {
   let postFindMode;
 
@@ -1295,6 +1481,18 @@ context("PostFindMode", () => {
     sendKeyboardEvent("a");
     sendKeyboardEvent("Escape", "keydown");
     assert.isTrue(postFindMode.modeIsActive);
+  });
+
+  should("exit once the user moves find's caret in an editable element", () => {
+    document.getElementById("test-div").innerHTML = "<div contenteditable>needle</div>";
+    const text = document.querySelector("[contenteditable]").firstChild;
+    getSelection().collapse(text, 0);
+    postFindMode = new PostFindMode();
+    sendKeyboardEvent("a", "keyup");
+    assert.isTrue(postFindMode.modeIsActive);
+    getSelection().collapse(text, 1);
+    sendKeyboardEvent("ArrowRight", "keyup");
+    assert.isFalse(postFindMode.modeIsActive);
   });
 });
 
